@@ -4,8 +4,9 @@ from collections import OrderedDict
 from datetime import date, datetime, time, timezone
 from logging import INFO, getLogger
 
-from radicale.storage import Collection as FileSystemCollection
-from radicale.xmlutils import _tag
+from radicale.storage.multifilesystem import Storage as FileSystemStorage
+from radicale.storage.multifilesystem import Collection as FileSystemCollection
+from radicale.xmlutils import make_clark
 
 log = getLogger('radicale.storage.by_index')
 log.setLevel(getLogger('radicale').level)
@@ -15,7 +16,7 @@ class Not(str):
     pass
 
 
-class Db(object):
+class Db:
     __version__ = '1'
 
     def __init__(self, folder, fields, collection,
@@ -175,10 +176,14 @@ class Db(object):
 class Collection(FileSystemCollection):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields = list(
-            map(lambda x: x.strip(), self.configuration.get(
-                'storage', 'radicale_storage_by_index_fields',
-                fallback='dtstart, dtend, uid').split(',')))
+        try:
+            self.fields = [
+                x.strip() for x in 
+                self._storage.configuration.get(
+                'storage', 'radicale_storage_by_index_fields').split(',')
+            ]
+        except KeyError:
+            self.fields = ['dtstart', 'dtend', 'uid']
         self.db = Db(self._filesystem_path, self.fields, self)
 
     def dt_to_timestamp(self, dt):
@@ -189,13 +194,13 @@ class Collection(FileSystemCollection):
 
     def _fill_request(self, filters, request):
         for filter_ in filters:
-            if filter_.tag in [_tag("C", "filter"), _tag("C", "comp-filter")]:
+            if filter_.tag in [make_clark("C:filter"), make_clark("C:comp-filter")]:
                 self._fill_request(filter_, request)
-            elif filter_.tag == _tag("C", "time-range"):
+            elif filter_.tag == make_clark("C:time-range"):
                 request['dtstart'] = filter_.get('start')
                 request['dtend'] = filter_.get('end')
-            if filter_.tag == _tag("C", "prop-filter"):
-                assert filter_[0].tag == _tag("C", "text-match")
+            if filter_.tag == make_clark("C:prop-filter"):
+                assert filter_[0].tag == make_clark("C:text-match")
                 text = filter_[0].text
                 if filter_[0].get('negate-condition') == 'yes':
                     text = Not(text)
@@ -218,12 +223,12 @@ class Collection(FileSystemCollection):
         return [(self.get(href), True) for href, in self.db.search(**request)]
 
     def get_db_params(self, item):
-        if hasattr(item.item, 'vevent'):
-            vobj = item.item.vevent
-        elif hasattr(item.item, 'vtodo'):
-            vobj = item.item.vtodo
-        elif hasattr(item.item, 'vjournal'):
-            vobj = item.item.vjournal
+        if hasattr(item.vobject_item, 'vevent'):
+            vobj = item.vobject_item.vevent
+        elif hasattr(item.vobject_item, 'vtodo'):
+            vobj = item.vobject_item.vtodo
+        elif hasattr(item.vobject_item, 'vjournal'):
+            vobj = item.vobject_item.vjournal
 
         recurrent = bool(getattr(vobj, 'rruleset', False))
         values = []
@@ -258,3 +263,8 @@ class Collection(FileSystemCollection):
     def delete(self, href=None):
         self.db.delete(href)
         super().delete(href)
+
+
+class Storage(FileSystemStorage):
+
+    _collection_class = Collection
